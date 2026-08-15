@@ -64,39 +64,7 @@ jobs:
       - name: Make Gradle executable
         run: chmod +x "$PROJECT_DIR/gradlew"
 
-      - name: Prepare Gradle Environment
-        shell: bash
-        run: |
-          set -e
-
-          unset JAVA_TOOL_OPTIONS
-          unset _JAVA_OPTIONS
-          unset GRADLE_OPTS
-
-          export GRADLE_OPTS="-Xmx2g -Dfile.encoding=UTF-8"
-
-          echo "JAVA_HOME=$JAVA_HOME"
-          java -version
-
-          chmod +x "$PROJECT_DIR/gradlew"
-
       - name: Build Debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-
-          unset JAVA_TOOL_OPTIONS
-          unset _JAVA_OPTIONS
-
-          export GRADLE_OPTS="-Xmx2g -Dfile.encoding=UTF-8"
-
-          ./gradlew --version
-
-          ./gradlew assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --console=plain
         working-directory: ${{ env.PROJECT_DIR }}
         run: ./gradlew assembleDebug --stacktrace
 
