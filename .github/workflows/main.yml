@@ -20,56 +20,95 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Find Android Gradle Project
-        id: find_project
+      - name: Extract SafeShield ZIP
         shell: bash
         run: |
-          echo "Searching for Gradle wrapper..."
+          set -e
 
-          GRADLEW=$(find . -type f -name "gradlew" -print -quit)
+          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found."
+            exit 1
+          fi
+
+          echo "Found ZIP: $ZIP_FILE"
+
+          mkdir -p extracted
+          unzip -o "$ZIP_FILE" -d extracted
+
+          echo "Extracted project:"
+          find extracted -maxdepth 4 -type f -name "gradlew" -print
+
+      - name: Find Android Gradle Project
+        shell: bash
+        run: |
+          set -e
+
+          GRADLEW=$(find extracted -type f -name "gradlew" | head -n 1)
 
           if [ -z "$GRADLEW" ]; then
-            echo "ERROR: gradlew was not found."
-            echo "Repository structure:"
-            find . -maxdepth 4 -type f | head -200
+            echo "ERROR: Android Gradle project not found."
+            echo "Checking extracted files:"
+            find extracted -maxdepth 4 -type f | head -100
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$GRADLEW")
 
-          echo "Found Gradle wrapper:"
-          echo "$GRADLEW"
-
-          echo "Android project directory:"
+          echo "Android project found at:"
           echo "$PROJECT_DIR"
 
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Make Gradle executable
+        run: chmod +x "$PROJECT_DIR/gradlew"
+
+      - name: Prepare Gradle Environment
         shell: bash
         run: |
-          chmod +x "${{ steps.find_project.outputs.project_dir }}/gradlew"
+          set -e
+
+          unset JAVA_TOOL_OPTIONS
+          unset _JAVA_OPTIONS
+          unset GRADLE_OPTS
+
+          export GRADLE_OPTS="-Xmx2g -Dfile.encoding=UTF-8"
+
+          echo "JAVA_HOME=$JAVA_HOME"
+          java -version
+
+          chmod +x "$PROJECT_DIR/gradlew"
 
       - name: Build Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          cd "${{ steps.find_project.outputs.project_dir }}"
-          ./gradlew assembleDebug --stacktrace
+          set -e
 
-      - name: Locate APK
+          unset JAVA_TOOL_OPTIONS
+          unset _JAVA_OPTIONS
+
+          export GRADLE_OPTS="-Xmx2g -Dfile.encoding=UTF-8"
+
+          ./gradlew --version
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Find APK
         shell: bash
         run: |
-          echo "Searching for generated APK..."
-
-          find . -type f -name "*.apk" -print
+          echo "APK files:"
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload SafeShield APK
         uses: actions/upload-artifact@v4
         with:
-          name: SafeShield-debug-APK
+          name: SafeShield-Debug-APK
           path: |
-            **/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
