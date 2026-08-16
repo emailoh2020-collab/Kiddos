@@ -15,17 +15,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
 
       - name: Extract SafeShield ZIP
         shell: bash
@@ -39,29 +37,34 @@ jobs:
             exit 1
           fi
 
+          echo "Using ZIP: $ZIP_FILE"
+
           rm -rf extracted
-          mkdir extracted
+          mkdir -p extracted
 
           unzip -q "$ZIP_FILE" -d extracted
 
-          echo "Extracted project:"
-          find extracted -maxdepth 3 -type f | head -100
+          echo "ZIP extracted successfully."
 
       - name: Locate Android Project
         shell: bash
         run: |
           set -e
 
-          ANDROID_DIR=$(find extracted -type f -name "gradlew" -print -quit | xargs -r dirname)
+          ANDROID_DIR=$(find extracted \
+            -type f \
+            -name "gradlew" \
+            -print -quit | xargs -r dirname)
 
           if [ -z "$ANDROID_DIR" ]; then
-            echo "ERROR: Android Gradle project not found"
+            echo "ERROR: Android Gradle project not found."
+            find extracted -maxdepth 5 -type f | head -200
             exit 1
           fi
 
           echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
 
-          echo "Android project:"
+          echo "Android project found:"
           echo "$ANDROID_DIR"
 
       - name: Build Web Assets
@@ -69,13 +72,27 @@ jobs:
         run: |
           set -e
 
-          cd extracted
+          WEB_ROOT="extracted"
 
-          if [ -f package.json ]; then
+          PACKAGE_JSON=$(find "$WEB_ROOT" \
+            -maxdepth 3 \
+            -name "package.json" \
+            -not -path "*/android/*" \
+            -print -quit)
+
+          if [ -n "$PACKAGE_JSON" ]; then
+            PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+
+            echo "Web project:"
+            echo "$PROJECT_DIR"
+
+            cd "$PROJECT_DIR"
+
             npm install
             npm run build
           else
-            echo "No package.json found - using existing web assets"
+            echo "No package.json found."
+            echo "Using existing web assets."
           fi
 
       - name: Locate Web Build
@@ -98,14 +115,18 @@ jobs:
           fi
 
           if [ -z "$INDEX" ]; then
-            echo "ERROR: index.html not found"
+            echo "ERROR: index.html not found."
+
+            echo "Available HTML files:"
+            find extracted -type f -name "*.html"
+
             exit 1
           fi
 
           WEB_DIR=$(dirname "$INDEX")
 
-          echo "INDEX=$INDEX"
-          echo "WEB_DIR=$WEB_DIR"
+          echo "Web build found:"
+          echo "$WEB_DIR"
 
           echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
 
@@ -116,33 +137,46 @@ jobs:
 
           DEST="$ANDROID_DIR/app/src/main/assets/dist"
 
-          echo "Source: $WEB_DIR"
-          echo "Destination: $DEST"
+          echo "Source:"
+          echo "$WEB_DIR"
+
+          echo "Destination:"
+          echo "$DEST"
 
           rm -rf "$DEST"
           mkdir -p "$DEST"
 
           cp -R "$WEB_DIR"/. "$DEST"/
 
-          echo "Android assets:"
-          find "$DEST" -maxdepth 2 -type f | head -100
-
           if [ ! -f "$DEST/index.html" ]; then
-            echo "ERROR: index.html was not copied"
+            echo "ERROR: index.html was not copied."
             exit 1
           fi
 
-          echo "index.html successfully installed."
+          echo "Web assets copied successfully."
 
-      - name: Make Gradle executable
+          echo "Files:"
+          find "$DEST" -maxdepth 2 -type f | head -100
+
+      - name: Make Gradle Executable
         shell: bash
         run: |
+          set -e
+
           chmod +x "$ANDROID_DIR/gradlew"
 
-      - name: Verify Gradle
+      - name: Verify Gradle Wrapper
         shell: bash
         run: |
+          set -e
+
           cd "$ANDROID_DIR"
+
+          test -f gradle/wrapper/gradle-wrapper.jar
+          test -f gradle/wrapper/gradle-wrapper.properties
+
+          echo "Gradle wrapper files found."
+
           ./gradlew --version
 
       - name: Build Debug APK
@@ -168,7 +202,11 @@ jobs:
             -print -quit)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated"
+            echo "ERROR: APK was not generated."
+
+            find "$ANDROID_DIR/app/build/outputs" \
+              -type f 2>/dev/null || true
+
             exit 1
           fi
 
