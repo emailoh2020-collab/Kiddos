@@ -20,80 +20,94 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Extract SafeShield ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found."
+            echo "ERROR: SafeShield ZIP not found."
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP_FILE"
+          echo "Using ZIP: $ZIP_FILE"
 
           mkdir -p extracted
-          unzip -o "$ZIP_FILE" -d extracted
+          unzip -q "$ZIP_FILE" -d extracted
 
-          echo "Extracted project:"
-          find extracted -maxdepth 4 -type f -name "gradlew" -print
+          ANDROID_DIR=$(find extracted -type f -name "settings.gradle*" -printf '%h\n' | head -n 1)
 
-      - name: Find Android Gradle Project
-        shell: bash
-        run: |
-          set -e
+          if [ -z "$ANDROID_DIR" ]; then
+            ANDROID_DIR=$(find extracted -type d -name android | head -n 1)
+          fi
 
-          GRADLEW=$(find extracted -type f -name "gradlew" | head -n 1)
-
-          if [ -z "$GRADLEW" ]; then
-            echo "ERROR: Android Gradle project not found."
-            echo "Checking extracted files:"
+          if [ -z "$ANDROID_DIR" ]; then
+            echo "ERROR: Android project not found."
             find extracted -maxdepth 4 -type f | head -100
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$GRADLEW")
+          echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
+          echo "Android project: $ANDROID_DIR"
 
-          echo "Android project found at:"
-          echo "$PROJECT_DIR"
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Make Gradle executable
-        run: chmod +x "$PROJECT_DIR/gradlew"
-
-      - name: Prepare Gradle Environment
+      - name: Install Gradle 8.10.2
         shell: bash
         run: |
           set -e
 
-          unset JAVA_TOOL_OPTIONS
-          unset _JAVA_OPTIONS
-          unset GRADLE_OPTS
+          wget -q https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
 
-          export GRADLE_OPTS="-Xmx2g -Dfile.encoding=UTF-8"
+          unzip -q gradle-8.10.2-bin.zip -d "$RUNNER_TEMP"
 
-          echo "JAVA_HOME=$JAVA_HOME"
-          java -version
+          echo "$RUNNER_TEMP/gradle-8.10.2/bin" >> "$GITHUB_PATH"
 
-          chmod +x "$PROJECT_DIR/gradlew"
+          gradle --version
+
+      - name: Build Web Assets
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f package.json ]; then
+            npm install
+            npm run build || true
+          else
+            echo "No package.json found. Skipping web build."
+          fi
+
+      - name: Prepare Android Assets
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p "$ANDROID_DIR/app/src/main/assets/dist"
+
+          if [ -d dist ]; then
+            cp -r dist/* "$ANDROID_DIR/app/src/main/assets/dist/" || true
+          elif [ -d build ]; then
+            cp -r build/* "$ANDROID_DIR/app/src/main/assets/dist/" || true
+          fi
 
       - name: Build Debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          unset JAVA_TOOL_OPTIONS
-          unset _JAVA_OPTIONS
+          cd "$ANDROID_DIR"
 
-          export GRADLE_OPTS="-Xmx2g -Dfile.encoding=UTF-8"
+          echo "Starting SafeShield Android build..."
+          echo "Using Gradle 8.10.2"
+          echo "Using Java:"
+          java -version
 
-          ./gradlew --version
-
-          ./gradlew assembleDebug \
+          gradle assembleDebug \
             --no-daemon \
             --stacktrace \
             --console=plain
@@ -101,12 +115,28 @@ jobs:
       - name: Find APK
         shell: bash
         run: |
-          echo "APK files:"
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
+          set -e
+
+          echo "Searching for generated APK..."
+
+          APK=$(find "$ANDROID_DIR" -type f -name "*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            find "$ANDROID_DIR" -type f | grep -E '\.(apk|aab)$' || true
+            exit 1
+          fi
+
+          echo "APK FOUND:"
+          echo "$APK"
+
+          mkdir -p "$GITHUB_WORKSPACE/apk-output"
+
+          cp "$APK" "$GITHUB_WORKSPACE/apk-output/SafeShield-debug.apk"
 
       - name: Upload SafeShield APK
         uses: actions/upload-artifact@v4
         with:
-          name: SafeShield-Debug-APK
-          path: |
-            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          name: SafeShield-debug-apk
+          path: apk-output/SafeShield-debug.apk
+          if-no-files-found: error
