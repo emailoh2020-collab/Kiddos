@@ -30,17 +30,25 @@ jobs:
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -name "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 3 -type f -name "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: SafeShield ZIP not found."
             exit 1
           fi
 
-          echo "Using ZIP: $ZIP_FILE"
+          echo "ZIP: $ZIP_FILE"
 
           mkdir -p extracted
           unzip -q "$ZIP_FILE" -d extracted
+
+          echo "Extracted files:"
+          find extracted -maxdepth 3 -type f | head -100
+
+      - name: Locate Android Project
+        shell: bash
+        run: |
+          set -e
 
           ANDROID_DIR=$(find extracted -type f -name "settings.gradle*" -printf '%h\n' | head -n 1)
 
@@ -50,12 +58,92 @@ jobs:
 
           if [ -z "$ANDROID_DIR" ]; then
             echo "ERROR: Android project not found."
-            find extracted -maxdepth 4 -type f | head -100
             exit 1
           fi
 
           echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
-          echo "Android project: $ANDROID_DIR"
+
+          echo "Android project:"
+          echo "$ANDROID_DIR"
+
+      - name: Locate Web Project
+        shell: bash
+        run: |
+          set -e
+
+          WEB_DIR=$(find extracted -type f -name "package.json" -not -path "*/android/*" -printf '%h\n' | head -n 1)
+
+          if [ -z "$WEB_DIR" ]; then
+            echo "ERROR: Web package.json not found."
+            exit 1
+          fi
+
+          echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
+
+          echo "Web project:"
+          echo "$WEB_DIR"
+
+      - name: Install Web Dependencies
+        shell: bash
+        run: |
+          set -e
+
+          cd "$WEB_DIR"
+
+          npm install
+
+      - name: Build Web Application
+        shell: bash
+        run: |
+          set -e
+
+          cd "$WEB_DIR"
+
+          npm run build
+
+      - name: Locate index.html
+        shell: bash
+        run: |
+          set -e
+
+          INDEX=$(find "$WEB_DIR" -type f -name "index.html" \
+            -not -path "*/node_modules/*" \
+            -not -path "*/android/*" | head -n 1)
+
+          if [ -z "$INDEX" ]; then
+            echo "ERROR: index.html was not generated."
+            find "$WEB_DIR" -maxdepth 4 -type f | head -200
+            exit 1
+          fi
+
+          WEB_DIST=$(dirname "$INDEX")
+
+          echo "INDEX=$INDEX"
+          echo "WEB_DIST=$WEB_DIST"
+
+          echo "WEB_DIST=$WEB_DIST" >> "$GITHUB_ENV"
+
+      - name: Copy Web Assets Into Android
+        shell: bash
+        run: |
+          set -e
+
+          ASSETS_DIR="$ANDROID_DIR/app/src/main/assets/dist"
+
+          rm -rf "$ASSETS_DIR"
+          mkdir -p "$ASSETS_DIR"
+
+          cp -r "$WEB_DIST"/. "$ASSETS_DIR"/
+
+          echo "Android assets:"
+          find "$ASSETS_DIR" -maxdepth 2 -type f | head -100
+
+          if [ ! -f "$ASSETS_DIR/index.html" ]; then
+            echo "ERROR: index.html was not copied to Android assets."
+            exit 1
+          fi
+
+          echo "SUCCESS: index.html exists inside Android assets."
 
       - name: Install Gradle 8.10.2
         shell: bash
@@ -70,31 +158,6 @@ jobs:
 
           gradle --version
 
-      - name: Build Web Assets
-        shell: bash
-        run: |
-          set -e
-
-          if [ -f package.json ]; then
-            npm install
-            npm run build || true
-          else
-            echo "No package.json found. Skipping web build."
-          fi
-
-      - name: Prepare Android Assets
-        shell: bash
-        run: |
-          set -e
-
-          mkdir -p "$ANDROID_DIR/app/src/main/assets/dist"
-
-          if [ -d dist ]; then
-            cp -r dist/* "$ANDROID_DIR/app/src/main/assets/dist/" || true
-          elif [ -d build ]; then
-            cp -r build/* "$ANDROID_DIR/app/src/main/assets/dist/" || true
-          fi
-
       - name: Build Debug APK
         shell: bash
         run: |
@@ -102,10 +165,7 @@ jobs:
 
           cd "$ANDROID_DIR"
 
-          echo "Starting SafeShield Android build..."
-          echo "Using Gradle 8.10.2"
-          echo "Using Java:"
-          java -version
+          echo "Building SafeShield..."
 
           gradle assembleDebug \
             --no-daemon \
@@ -117,22 +177,22 @@ jobs:
         run: |
           set -e
 
-          echo "Searching for generated APK..."
-
-          APK=$(find "$ANDROID_DIR" -type f -name "*.apk" | head -n 1)
+          APK=$(find "$ANDROID_DIR" \
+            -type f \
+            -name "*.apk" | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated."
-            find "$ANDROID_DIR" -type f | grep -E '\.(apk|aab)$' || true
             exit 1
           fi
 
-          echo "APK FOUND:"
+          echo "APK:"
           echo "$APK"
 
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
 
-          cp "$APK" "$GITHUB_WORKSPACE/apk-output/SafeShield-debug.apk"
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/apk-output/SafeShield-debug.apk"
 
       - name: Upload SafeShield APK
         uses: actions/upload-artifact@v4
