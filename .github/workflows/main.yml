@@ -25,6 +25,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
       - name: Extract SafeShield ZIP
         shell: bash
         run: |
@@ -72,15 +77,14 @@ jobs:
         run: |
           set -e
 
-          WEB_ROOT="extracted"
-
-          PACKAGE_JSON=$(find "$WEB_ROOT" \
+          PACKAGE_JSON=$(find extracted \
             -maxdepth 3 \
             -name "package.json" \
             -not -path "*/android/*" \
             -print -quit)
 
           if [ -n "$PACKAGE_JSON" ]; then
+
             PROJECT_DIR=$(dirname "$PACKAGE_JSON")
 
             echo "Web project:"
@@ -90,9 +94,12 @@ jobs:
 
             npm install
             npm run build
+
           else
+
             echo "No package.json found."
             echo "Using existing web assets."
+
           fi
 
       - name: Locate Web Build
@@ -107,19 +114,18 @@ jobs:
             -print -quit)
 
           if [ -z "$INDEX" ]; then
+
             INDEX=$(find extracted \
               -type f \
               -name "index.html" \
               -not -path "*/android/*" \
               -print -quit)
+
           fi
 
           if [ -z "$INDEX" ]; then
             echo "ERROR: index.html not found."
-
-            echo "Available HTML files:"
             find extracted -type f -name "*.html"
-
             exit 1
           fi
 
@@ -155,29 +161,12 @@ jobs:
 
           echo "Web assets copied successfully."
 
-          echo "Files:"
-          find "$DEST" -maxdepth 2 -type f | head -100
-
-      - name: Make Gradle Executable
+      - name: Verify Gradle
         shell: bash
         run: |
           set -e
 
-          chmod +x "$ANDROID_DIR/gradlew"
-
-      - name: Verify Gradle Wrapper
-        shell: bash
-        run: |
-          set -e
-
-          cd "$ANDROID_DIR"
-
-          test -f gradle/wrapper/gradle-wrapper.jar
-          test -f gradle/wrapper/gradle-wrapper.properties
-
-          echo "Gradle wrapper files found."
-
-          ./gradlew --version
+          gradle --version
 
       - name: Build Debug APK
         shell: bash
@@ -186,7 +175,7 @@ jobs:
 
           cd "$ANDROID_DIR"
 
-          ./gradlew assembleDebug \
+          gradle assembleDebug \
             --no-daemon \
             --stacktrace \
             --console=plain
