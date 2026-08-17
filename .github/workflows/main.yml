@@ -18,6 +18,7 @@ jobs:
       - name: Checkout SafeShield
         uses: actions/checkout@v4
 
+
       # ==========================================
       # Java 17
       # ==========================================
@@ -27,6 +28,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+
       # ==========================================
       # Node.js 20
       # ==========================================
@@ -34,12 +36,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
+
 
       # ==========================================
       # Android SDK
       # ==========================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
 
       # ==========================================
       # Find SafeShield ZIP
@@ -49,21 +54,22 @@ jobs:
         run: |
           set -e
 
-          ZIP=$(find . -maxdepth 3 -type f \
-            -iname "*.zip" \
-            -not -path "./.git/*" \
-            | head -n 1)
+          ZIP=$(find . -maxdepth 3 -type f -iname "*.zip" \
+            -not -path "./.git/*" | head -n 1)
 
           if [ -z "$ZIP" ]; then
             echo "ERROR: SafeShield ZIP not found"
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP"
+          echo "Found ZIP:"
+          echo "$ZIP"
+
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
+
       # ==========================================
-      # Extract ZIP
+      # Extract SafeShield
       # ==========================================
       - name: Extract SafeShield ZIP
         shell: bash
@@ -75,8 +81,9 @@ jobs:
 
           unzip -q "$ZIP" -d extracted
 
-          echo "Extracted files:"
+          echo "Extracted project structure:"
           find extracted -maxdepth 4 -type f | head -200
+
 
       # ==========================================
       # Locate Android Project
@@ -88,35 +95,31 @@ jobs:
 
           ANDROID_DIR=""
 
-          while IFS= read -r SETTINGS_FILE; do
-            CANDIDATE=$(dirname "$SETTINGS_FILE")
+          while IFS= read -r file; do
+            candidate="$(dirname "$file")"
 
-            if [ -d "$CANDIDATE/app" ]; then
-              ANDROID_DIR="$CANDIDATE"
+            if [ -f "$candidate/settings.gradle" ] || \
+               [ -f "$candidate/settings.gradle.kts" ]; then
+              ANDROID_DIR="$candidate"
               break
             fi
           done < <(
-            find extracted -type f \
-              \( \
-                -name "settings.gradle" \
-                -o -name "settings.gradle.kts" \
-              \) \
+            find extracted \
+              -type f \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
               -print
           )
 
           if [ -z "$ANDROID_DIR" ]; then
             echo "ERROR: Android Gradle project not found"
-
+            echo ""
             echo "Searching for Gradle files:"
             find extracted -type f \
-              \( \
-                -name "settings.gradle" \
-                -o -name "settings.gradle.kts" \
-                -o -name "build.gradle" \
-                -o -name "build.gradle.kts" \
-              \) \
+              \( -name "settings.gradle" \
+              -o -name "settings.gradle.kts" \
+              -o -name "build.gradle" \
+              -o -name "build.gradle.kts" \) \
               -print
-
             exit 1
           fi
 
@@ -124,6 +127,7 @@ jobs:
           echo "$ANDROID_DIR"
 
           echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
+
 
       # ==========================================
       # Locate Web Project
@@ -135,28 +139,30 @@ jobs:
 
           WEB_DIR=""
 
-          while IFS= read -r PACKAGE_FILE; do
-            CANDIDATE=$(dirname "$PACKAGE_FILE")
+          while IFS= read -r file; do
+            candidate="$(dirname "$file")"
 
-            if [ -f "$CANDIDATE/package.json" ]; then
-              WEB_DIR="$CANDIDATE"
+            if [ -f "$candidate/package.json" ]; then
+              WEB_DIR="$candidate"
               break
             fi
           done < <(
-            find extracted -type f \
+            find extracted \
+              -type f \
               -name "package.json" \
               -not -path "*/node_modules/*" \
               -print
           )
 
-          if [ -z "$WEB_DIR" ]; then
-            echo "No package.json found."
-            echo "WEB_DIR=extracted" >> "$GITHUB_ENV"
-          else
+          if [ -n "$WEB_DIR" ]; then
             echo "Web project found:"
             echo "$WEB_DIR"
             echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
+          else
+            echo "No package.json found."
+            echo "WEB_DIR=" >> "$GITHUB_ENV"
           fi
+
 
       # ==========================================
       # Build Web Assets
@@ -166,23 +172,25 @@ jobs:
         run: |
           set -e
 
-          cd "$WEB_DIR"
-
-          if [ -f package-lock.json ]; then
-            npm ci
-          elif [ -f package.json ]; then
-            npm install
-          else
-            echo "No package.json found."
-            echo "Skipping npm build."
+          if [ -z "$WEB_DIR" ]; then
+            echo "No web project detected."
             exit 0
           fi
 
-          if npm run | grep -q " build"; then
-            npm run build
+          cd "$WEB_DIR"
+
+          echo "Installing web dependencies..."
+
+          if [ -f package-lock.json ]; then
+            npm ci
           else
-            echo "No build script found."
+            npm install
           fi
+
+          echo "Building web application..."
+
+          npm run build
+
 
       # ==========================================
       # Locate Web Build
@@ -194,56 +202,28 @@ jobs:
 
           WEB_DIST=""
 
-          while IFS= read -r INDEX_FILE; do
-            CANDIDATE=$(dirname "$INDEX_FILE")
-
-            case "$CANDIDATE" in
-              */node_modules/*)
-                continue
-                ;;
-              */android/*)
-                continue
-                ;;
-            esac
-
-            WEB_DIST="$CANDIDATE"
-            break
-          done < <(
-            find "$WEB_DIR" -type f \
-              -path "*/dist/index.html" \
-              -print
-          )
-
-          if [ -z "$WEB_DIST" ]; then
-
-            while IFS= read -r INDEX_FILE; do
-              CANDIDATE=$(dirname "$INDEX_FILE")
-
-              case "$CANDIDATE" in
-                */node_modules/*)
-                  continue
-                  ;;
-                */android/*)
-                  continue
-                  ;;
-              esac
-
-              WEB_DIST="$CANDIDATE"
+          for candidate in \
+            "$WEB_DIR/dist" \
+            "$WEB_DIR/build" \
+            "extracted/dist" \
+            "extracted/build"
+          do
+            if [ -f "$candidate/index.html" ]; then
+              WEB_DIST="$candidate"
               break
-
-            done < <(
-              find "$WEB_DIR" -type f \
-                -name "index.html" \
-                -not -path "*/node_modules/*" \
-                -not -path "*/android/*" \
-                -print
-            )
-
-          fi
+            fi
+          done
 
           if [ -z "$WEB_DIST" ]; then
-            echo "ERROR: Web index.html not found"
-            find "$WEB_DIR" -maxdepth 5 -type f | head -200
+            echo "ERROR: Web build index.html not found"
+
+            echo "Searching:"
+            find extracted \
+              -type f \
+              -name "index.html" \
+              -not -path "*/node_modules/*" \
+              -print
+
             exit 1
           fi
 
@@ -251,6 +231,7 @@ jobs:
           echo "$WEB_DIST"
 
           echo "WEB_DIST=$WEB_DIST" >> "$GITHUB_ENV"
+
 
       # ==========================================
       # Copy Web Assets Into Android
@@ -260,26 +241,32 @@ jobs:
         run: |
           set -e
 
-          DEST="$ANDROID_DIR/app/src/main/assets/dist"
+          ASSETS_DIR="$ANDROID_DIR/app/src/main/assets"
+          DIST_DIR="$ASSETS_DIR/dist"
 
-          echo "Source:"
+          echo "Android assets:"
+          echo "$ASSETS_DIR"
+
+          echo "Web build:"
           echo "$WEB_DIST"
 
-          echo "Destination:"
-          echo "$DEST"
+          mkdir -p "$ASSETS_DIR"
 
-          rm -rf "$DEST"
-          mkdir -p "$DEST"
+          # Remove old generated web files
+          rm -rf "$DIST_DIR"
 
-          cp -a "$WEB_DIST"/. "$DEST"/
+          # Recreate clean dist directory
+          mkdir -p "$DIST_DIR"
 
-          echo "Copied Android assets:"
-          find "$DEST" -maxdepth 3 -type f | head -100
+          # IMPORTANT:
+          # Copy ONLY the contents of the web dist directory.
+          # Do not copy the whole extracted directory.
+          cp -a "$WEB_DIST"/. "$DIST_DIR"/
 
-          if [ ! -f "$DEST/index.html" ]; then
-            echo "ERROR: index.html was not copied"
-            exit 1
-          fi
+          echo ""
+          echo "Android web assets:"
+          find "$DIST_DIR" -maxdepth 3 -type f | head -100
+
 
       # ==========================================
       # Verify Android Web Assets
@@ -292,20 +279,60 @@ jobs:
           INDEX="$ANDROID_DIR/app/src/main/assets/dist/index.html"
 
           if [ ! -f "$INDEX" ]; then
-            echo "ERROR: Missing:"
+            echo "ERROR: Android index.html not found:"
             echo "$INDEX"
             exit 1
           fi
 
-          echo "Web assets verified successfully."
+          echo "Android index.html verified:"
+          echo "$INDEX"
+
+          echo ""
+          echo "Asset files:"
+          find "$ANDROID_DIR/app/src/main/assets/dist" \
+            -type f | head -100
+
 
       # ==========================================
-      # Gradle 8.10.2
+      # Install Gradle 8.10.2 DIRECTLY
       # ==========================================
-      - name: Setup Gradle 8.10.2
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
+      # IMPORTANT:
+      # We intentionally DO NOT use:
+      # gradle/actions/setup-gradle
+      #
+      # This avoids the corrupted/invalid
+      # gradle-wrapper.jar in the ZIP.
+      # ==========================================
+      - name: Install Gradle 8.10.2
+        shell: bash
+        run: |
+          set -e
+
+          GRADLE_VERSION="8.10.2"
+          GRADLE_DIR="$RUNNER_TEMP/gradle-$GRADLE_VERSION"
+
+          if [ ! -x "$GRADLE_DIR/bin/gradle" ]; then
+
+            echo "Downloading Gradle $GRADLE_VERSION..."
+
+            curl -fsSL \
+              "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
+              -o "$RUNNER_TEMP/gradle.zip"
+
+            rm -rf "$GRADLE_DIR"
+
+            unzip -q \
+              "$RUNNER_TEMP/gradle.zip" \
+              -d "$RUNNER_TEMP"
+
+          fi
+
+          echo "Gradle installed:"
+          "$GRADLE_DIR/bin/gradle" --version
+
+          echo "GRADLE_HOME=$GRADLE_DIR" >> "$GITHUB_ENV"
+          echo "$GRADLE_DIR/bin" >> "$GITHUB_PATH"
+
 
       # ==========================================
       # Make Gradle Executable
@@ -315,38 +342,36 @@ jobs:
         run: |
           set -e
 
-          cd "$ANDROID_DIR"
+          chmod +x "$GRADLE_HOME/bin/gradle"
 
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-          fi
+          "$GRADLE_HOME/bin/gradle" --version
 
-      # ==========================================
-      # Verify Gradle
-      # ==========================================
-      - name: Verify Gradle
-        shell: bash
-        run: |
-          set -e
-
-          cd "$ANDROID_DIR"
-
-          gradle --version
 
       # ==========================================
       # Build Debug APK
       # ==========================================
       - name: Build Debug APK
         shell: bash
+        working-directory: ${{ env.ANDROID_DIR }}
         run: |
           set -e
 
-          cd "$ANDROID_DIR"
+          echo "Android project:"
+          pwd
 
-          gradle assembleDebug \
+          echo ""
+          echo "Gradle version:"
+          "$GRADLE_HOME/bin/gradle" --version
+
+          echo ""
+          echo "Building Debug APK..."
+
+          "$GRADLE_HOME/bin/gradle" \
+            assembleDebug \
             --no-daemon \
             --stacktrace \
             --console=plain
+
 
       # ==========================================
       # Find APK
@@ -358,22 +383,25 @@ jobs:
 
           APK=$(find "$ANDROID_DIR" \
             -type f \
-            -name "*-debug.apk" \
+            -name "*.apk" \
+            -path "*/build/outputs/apk/*" \
             | head -n 1)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Debug APK not found"
-            find "$ANDROID_DIR" \
-              -type f \
-              -name "*.apk" \
-              -print
+            echo "ERROR: APK was not generated"
+
+            echo ""
+            echo "Searching all APK files:"
+            find "$ANDROID_DIR" -type f -name "*.apk" -print
+
             exit 1
           fi
 
           echo "APK found:"
           echo "$APK"
 
-          echo "APK=$APK" >> "$GITHUB_ENV"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
 
       # ==========================================
       # Upload APK
@@ -381,6 +409,25 @@ jobs:
       - name: Upload SafeShield APK
         uses: actions/upload-artifact@v4
         with:
-          name: SafeShield-debug
-          path: ${{ env.APK }}
+          name: SafeShield-Debug-APK
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
+
+
+      # ==========================================
+      # Build Summary
+      # ==========================================
+      - name: Build Summary
+        shell: bash
+        run: |
+          echo "=========================================="
+          echo " SafeShield APK BUILD SUCCESSFUL"
+          echo "=========================================="
+          echo ""
+          echo "Android project:"
+          echo "$ANDROID_DIR"
+          echo ""
+          echo "APK:"
+          echo "$APK_PATH"
+          echo ""
+          ls -lh "$APK_PATH"
