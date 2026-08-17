@@ -26,7 +26,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       # ==========================================
       # Node.js 20
@@ -35,7 +34,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
 
       # ==========================================
       # Android SDK
@@ -51,7 +49,8 @@ jobs:
         run: |
           set -e
 
-          ZIP=$(find . -maxdepth 3 -type f -iname "*.zip" \
+          ZIP=$(find . -maxdepth 3 -type f \
+            -iname "*.zip" \
             -not -path "./.git/*" \
             | head -n 1)
 
@@ -76,7 +75,7 @@ jobs:
 
           unzip -q "$ZIP" -d extracted
 
-          echo "Extracted project:"
+          echo "Extracted files:"
           find extracted -maxdepth 4 -type f | head -200
 
       # ==========================================
@@ -98,19 +97,26 @@ jobs:
             fi
           done < <(
             find extracted -type f \
-              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              \( \
+                -name "settings.gradle" \
+                -o -name "settings.gradle.kts" \
+              \) \
               -print
           )
 
           if [ -z "$ANDROID_DIR" ]; then
             echo "ERROR: Android Gradle project not found"
-            echo "Searching for Gradle files..."
+
+            echo "Searching for Gradle files:"
             find extracted -type f \
-              \( -name "settings.gradle" \
-              -o -name "settings.gradle.kts" \
-              -o -name "build.gradle" \
-              -o -name "build.gradle.kts" \) \
+              \( \
+                -name "settings.gradle" \
+                -o -name "settings.gradle.kts" \
+                -o -name "build.gradle" \
+                -o -name "build.gradle.kts" \
+              \) \
               -print
+
             exit 1
           fi
 
@@ -144,17 +150,13 @@ jobs:
           )
 
           if [ -z "$WEB_DIR" ]; then
-            echo "WARNING: package.json not found."
-
-            if [ -d "extracted" ]; then
-              WEB_DIR="extracted"
-            fi
+            echo "No package.json found."
+            echo "WEB_DIR=extracted" >> "$GITHUB_ENV"
+          else
+            echo "Web project found:"
+            echo "$WEB_DIR"
+            echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
           fi
-
-          echo "Web project:"
-          echo "$WEB_DIR"
-
-          echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
 
       # ==========================================
       # Build Web Assets
@@ -172,13 +174,14 @@ jobs:
             npm install
           else
             echo "No package.json found."
-            exit 1
+            echo "Skipping npm build."
+            exit 0
           fi
 
           if npm run | grep -q " build"; then
             npm run build
           else
-            echo "No npm build script found."
+            echo "No build script found."
           fi
 
       # ==========================================
@@ -212,6 +215,7 @@ jobs:
           )
 
           if [ -z "$WEB_DIST" ]; then
+
             while IFS= read -r INDEX_FILE; do
               CANDIDATE=$(dirname "$INDEX_FILE")
 
@@ -226,6 +230,7 @@ jobs:
 
               WEB_DIST="$CANDIDATE"
               break
+
             done < <(
               find "$WEB_DIR" -type f \
                 -name "index.html" \
@@ -233,11 +238,12 @@ jobs:
                 -not -path "*/android/*" \
                 -print
             )
+
           fi
 
           if [ -z "$WEB_DIST" ]; then
             echo "ERROR: Web index.html not found"
-            find "$WEB_DIR" -maxdepth 4 -type f | head -200
+            find "$WEB_DIR" -maxdepth 5 -type f | head -200
             exit 1
           fi
 
@@ -247,7 +253,7 @@ jobs:
           echo "WEB_DIST=$WEB_DIST" >> "$GITHUB_ENV"
 
       # ==========================================
-      # Copy Web Assets
+      # Copy Web Assets Into Android
       # ==========================================
       - name: Copy Web Assets Into Android
         shell: bash
@@ -262,15 +268,12 @@ jobs:
           echo "Destination:"
           echo "$DEST"
 
-          # Completely remove previous web assets
           rm -rf "$DEST"
-
           mkdir -p "$DEST"
 
-          # Copy CONTENTS of dist, not dist itself
           cp -a "$WEB_DIST"/. "$DEST"/
 
-          echo "Android assets:"
+          echo "Copied Android assets:"
           find "$DEST" -maxdepth 3 -type f | head -100
 
           if [ ! -f "$DEST/index.html" ]; then
@@ -289,15 +292,15 @@ jobs:
           INDEX="$ANDROID_DIR/app/src/main/assets/dist/index.html"
 
           if [ ! -f "$INDEX" ]; then
-            echo "ERROR: Missing Android assets index.html"
+            echo "ERROR: Missing:"
+            echo "$INDEX"
             exit 1
           fi
 
-          echo "Verified:"
-          echo "$INDEX"
+          echo "Web assets verified successfully."
 
       # ==========================================
-      # Install Gradle 8.10.2
+      # Gradle 8.10.2
       # ==========================================
       - name: Setup Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
@@ -360,7 +363,10 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "ERROR: Debug APK not found"
-            find "$ANDROID_DIR" -type f -name "*.apk" -print
+            find "$ANDROID_DIR" \
+              -type f \
+              -name "*.apk" \
+              -print
             exit 1
           fi
 
