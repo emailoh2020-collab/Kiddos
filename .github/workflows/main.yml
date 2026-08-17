@@ -31,12 +31,14 @@ jobs:
 
       # ==========================================
       # Node.js 20
+      # IMPORTANT:
+      # No npm cache because package-lock.json
+      # is not located in repository root.
       # ==========================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
 
 
       # ==========================================
@@ -54,8 +56,12 @@ jobs:
         run: |
           set -e
 
-          ZIP=$(find . -maxdepth 3 -type f -iname "*.zip" \
-            -not -path "./.git/*" | head -n 1)
+          ZIP=$(find . \
+            -maxdepth 3 \
+            -type f \
+            -iname "*.zip" \
+            -not -path "./.git/*" \
+            | head -n 1)
 
           if [ -z "$ZIP" ]; then
             echo "ERROR: SafeShield ZIP not found"
@@ -69,7 +75,7 @@ jobs:
 
 
       # ==========================================
-      # Extract SafeShield
+      # Extract SafeShield ZIP
       # ==========================================
       - name: Extract SafeShield ZIP
         shell: bash
@@ -81,7 +87,7 @@ jobs:
 
           unzip -q "$ZIP" -d extracted
 
-          echo "Extracted project structure:"
+          echo "Extracted files:"
           find extracted -maxdepth 4 -type f | head -200
 
 
@@ -106,7 +112,10 @@ jobs:
           done < <(
             find extracted \
               -type f \
-              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              \( \
+                -name "settings.gradle" \
+                -o -name "settings.gradle.kts" \
+              \) \
               -print
           )
 
@@ -114,12 +123,17 @@ jobs:
             echo "ERROR: Android Gradle project not found"
             echo ""
             echo "Searching for Gradle files:"
-            find extracted -type f \
-              \( -name "settings.gradle" \
-              -o -name "settings.gradle.kts" \
-              -o -name "build.gradle" \
-              -o -name "build.gradle.kts" \) \
+
+            find extracted \
+              -type f \
+              \( \
+                -name "settings.gradle" \
+                -o -name "settings.gradle.kts" \
+                -o -name "build.gradle" \
+                -o -name "build.gradle.kts" \
+              \) \
               -print
+
             exit 1
           fi
 
@@ -157,9 +171,11 @@ jobs:
           if [ -n "$WEB_DIR" ]; then
             echo "Web project found:"
             echo "$WEB_DIR"
+
             echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
           else
             echo "No package.json found."
+
             echo "WEB_DIR=" >> "$GITHUB_ENV"
           fi
 
@@ -183,6 +199,11 @@ jobs:
 
           if [ -f package-lock.json ]; then
             npm ci
+          elif [ -f npm-shrinkwrap.json ]; then
+            npm ci
+          elif [ -f yarn.lock ]; then
+            corepack enable
+            yarn install --frozen-lockfile
           else
             npm install
           fi
@@ -217,7 +238,9 @@ jobs:
           if [ -z "$WEB_DIST" ]; then
             echo "ERROR: Web build index.html not found"
 
-            echo "Searching:"
+            echo ""
+            echo "Searching for index.html:"
+
             find extracted \
               -type f \
               -name "index.html" \
@@ -252,20 +275,23 @@ jobs:
 
           mkdir -p "$ASSETS_DIR"
 
-          # Remove old generated web files
+          # Remove old generated web assets
           rm -rf "$DIST_DIR"
 
-          # Recreate clean dist directory
+          # Create clean dist directory
           mkdir -p "$DIST_DIR"
 
           # IMPORTANT:
-          # Copy ONLY the contents of the web dist directory.
-          # Do not copy the whole extracted directory.
+          # Copy ONLY the contents of the web build.
+          # Do not copy extracted/ into itself.
           cp -a "$WEB_DIST"/. "$DIST_DIR"/
 
           echo ""
           echo "Android web assets:"
-          find "$DIST_DIR" -maxdepth 3 -type f | head -100
+          find "$DIST_DIR" \
+            -maxdepth 3 \
+            -type f \
+            | head -100
 
 
       # ==========================================
@@ -289,19 +315,17 @@ jobs:
 
           echo ""
           echo "Asset files:"
+
           find "$ANDROID_DIR/app/src/main/assets/dist" \
-            -type f | head -100
+            -type f \
+            | head -100
 
 
       # ==========================================
       # Install Gradle 8.10.2 DIRECTLY
-      # ==========================================
-      # IMPORTANT:
-      # We intentionally DO NOT use:
-      # gradle/actions/setup-gradle
       #
-      # This avoids the corrupted/invalid
-      # gradle-wrapper.jar in the ZIP.
+      # Do NOT use gradle/actions/setup-gradle.
+      # This avoids the invalid gradle-wrapper.jar.
       # ==========================================
       - name: Install Gradle 8.10.2
         shell: bash
@@ -361,6 +385,7 @@ jobs:
 
           echo ""
           echo "Gradle version:"
+
           "$GRADLE_HOME/bin/gradle" --version
 
           echo ""
@@ -392,7 +417,11 @@ jobs:
 
             echo ""
             echo "Searching all APK files:"
-            find "$ANDROID_DIR" -type f -name "*.apk" -print
+
+            find "$ANDROID_DIR" \
+              -type f \
+              -name "*.apk" \
+              -print
 
             exit 1
           fi
@@ -430,4 +459,5 @@ jobs:
           echo "APK:"
           echo "$APK_PATH"
           echo ""
+
           ls -lh "$APK_PATH"
