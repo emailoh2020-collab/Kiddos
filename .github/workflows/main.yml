@@ -6,9 +6,6 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -16,55 +13,58 @@ jobs:
     steps:
 
       # ==========================================
-      # 1. Checkout
+      # Checkout
       # ==========================================
       - name: Checkout SafeShield
         uses: actions/checkout@v4
 
-
       # ==========================================
-      # 2. Java 17
+      # Java 17
       # ==========================================
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-
+          cache: gradle
 
       # ==========================================
-      # 3. Node.js 20
+      # Node.js 20
       # ==========================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
+          cache: npm
 
       # ==========================================
-      # 4. Find SafeShield ZIP
+      # Android SDK
+      # ==========================================
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # ==========================================
+      # Find SafeShield ZIP
       # ==========================================
       - name: Find SafeShield ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP=$(find . -maxdepth 2 -type f -iname "*.zip" \
-            ! -path "./.git/*" | head -n 1)
+          ZIP=$(find . -maxdepth 3 -type f -iname "*.zip" \
+            -not -path "./.git/*" \
+            | head -n 1)
 
           if [ -z "$ZIP" ]; then
-            echo "ERROR: SafeShield ZIP not found."
+            echo "ERROR: SafeShield ZIP not found"
             exit 1
           fi
 
-          echo "Found ZIP:"
-          echo "$ZIP"
-
+          echo "Found ZIP: $ZIP"
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
-
       # ==========================================
-      # 5. Extract ZIP
+      # Extract ZIP
       # ==========================================
       - name: Extract SafeShield ZIP
         shell: bash
@@ -76,14 +76,11 @@ jobs:
 
           unzip -q "$ZIP" -d extracted
 
-          echo "ZIP extracted successfully."
-
-          echo "Project structure:"
-          find extracted -maxdepth 4 -type f | head -150
-
+          echo "Extracted project:"
+          find extracted -maxdepth 4 -type f | head -200
 
       # ==========================================
-      # 6. Locate Android Project
+      # Locate Android Project
       # ==========================================
       - name: Locate Android Project
         shell: bash
@@ -92,130 +89,100 @@ jobs:
 
           ANDROID_DIR=""
 
-          while IFS= read -r GRADLE_FILE; do
+          while IFS= read -r SETTINGS_FILE; do
+            CANDIDATE=$(dirname "$SETTINGS_FILE")
 
-            DIR="$(dirname "$GRADLE_FILE")"
-
-            if [ -f "$DIR/settings.gradle" ] || \
-               [ -f "$DIR/settings.gradle.kts" ] || \
-               [ -f "$DIR/build.gradle" ] || \
-               [ -f "$DIR/build.gradle.kts" ]; then
-
-              ANDROID_DIR="$DIR"
+            if [ -d "$CANDIDATE/app" ]; then
+              ANDROID_DIR="$CANDIDATE"
               break
-
             fi
-
-          done < <(find extracted -type f \
-            \
-              -name "gradlew" \
-              -o -name "settings.gradle" \
-              -o -name "settings.gradle.kts" \
-            \
-            -print)
-
-          # Fallback: find directories containing Android build files
-          if [ -z "$ANDROID_DIR" ]; then
-
-            while IFS= read -r BUILD_FILE; do
-
-              DIR="$(dirname "$BUILD_FILE")"
-
-              if [ -f "$DIR/settings.gradle" ] || \
-                 [ -f "$DIR/settings.gradle.kts" ]; then
-
-                ANDROID_DIR="$DIR"
-                break
-
-              fi
-
-            done < <(find extracted -type f \
-              \
-                -name "build.gradle" \
-                -o -name "build.gradle.kts" \
-              \
-              -print)
-
-          fi
-
-          if [ -z "$ANDROID_DIR" ]; then
-
-            echo "ERROR: Android Gradle project not found."
-
-            echo "Searching for Gradle files..."
-
+          done < <(
             find extracted -type f \
-              \
-                -name "gradlew" \
-                -o -name "settings.gradle" \
-                -o -name "settings.gradle.kts" \
-                -o -name "build.gradle" \
-                -o -name "build.gradle.kts" \
-              \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
               -print
+          )
 
+          if [ -z "$ANDROID_DIR" ]; then
+            echo "ERROR: Android Gradle project not found"
+            echo "Searching for Gradle files..."
+            find extracted -type f \
+              \( -name "settings.gradle" \
+              -o -name "settings.gradle.kts" \
+              -o -name "build.gradle" \
+              -o -name "build.gradle.kts" \) \
+              -print
             exit 1
           fi
-
-          ANDROID_DIR="$(realpath "$ANDROID_DIR")"
 
           echo "Android project found:"
           echo "$ANDROID_DIR"
 
           echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
 
+      # ==========================================
+      # Locate Web Project
+      # ==========================================
+      - name: Locate Web Project
+        shell: bash
+        run: |
+          set -e
+
+          WEB_DIR=""
+
+          while IFS= read -r PACKAGE_FILE; do
+            CANDIDATE=$(dirname "$PACKAGE_FILE")
+
+            if [ -f "$CANDIDATE/package.json" ]; then
+              WEB_DIR="$CANDIDATE"
+              break
+            fi
+          done < <(
+            find extracted -type f \
+              -name "package.json" \
+              -not -path "*/node_modules/*" \
+              -print
+          )
+
+          if [ -z "$WEB_DIR" ]; then
+            echo "WARNING: package.json not found."
+
+            if [ -d "extracted" ]; then
+              WEB_DIR="extracted"
+            fi
+          fi
+
+          echo "Web project:"
+          echo "$WEB_DIR"
+
+          echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
 
       # ==========================================
-      # 7. Build Web Assets
+      # Build Web Assets
       # ==========================================
       - name: Build Web Assets
         shell: bash
         run: |
           set -e
 
-          WEB_PROJECT=""
+          cd "$WEB_DIR"
 
-          # Check root project first
-          if [ -f "package.json" ]; then
-
-            WEB_PROJECT="."
-
-          else
-
-            PACKAGE_JSON=$(find extracted -type f \
-              -name "package.json" \
-              ! -path "*/node_modules/*" \
-              ! -path "*/android/*" \
-              -print -quit || true)
-
-            if [ -n "$PACKAGE_JSON" ]; then
-              WEB_PROJECT="$(dirname "$PACKAGE_JSON")"
-            fi
-
-          fi
-
-          if [ -z "$WEB_PROJECT" ]; then
-            echo "No package.json found."
-            echo "Skipping npm build."
-            exit 0
-          fi
-
-          echo "Web project:"
-          echo "$WEB_PROJECT"
-
-          cd "$WEB_PROJECT"
-
-          if [ -f "package-lock.json" ]; then
+          if [ -f package-lock.json ]; then
             npm ci
-          else
+          elif [ -f package.json ]; then
             npm install
+          else
+            echo "No package.json found."
+            exit 1
           fi
 
-          npm run build
-
+          if npm run | grep -q " build"; then
+            npm run build
+          else
+            echo "No npm build script found."
+          fi
 
       # ==========================================
-      # 8. Locate Web Build
+      # Locate Web Build
       # ==========================================
       - name: Locate Web Build
         shell: bash
@@ -224,48 +191,63 @@ jobs:
 
           WEB_DIST=""
 
-          # Root dist
-          if [ -f "dist/index.html" ]; then
+          while IFS= read -r INDEX_FILE; do
+            CANDIDATE=$(dirname "$INDEX_FILE")
 
-            WEB_DIST="$(realpath dist)"
+            case "$CANDIDATE" in
+              */node_modules/*)
+                continue
+                ;;
+              */android/*)
+                continue
+                ;;
+            esac
 
-          else
-
-            # Search extracted project
-            INDEX_FILE=$(find extracted -type f \
+            WEB_DIST="$CANDIDATE"
+            break
+          done < <(
+            find "$WEB_DIR" -type f \
               -path "*/dist/index.html" \
-              ! -path "*/node_modules/*" \
-              ! -path "*/app/src/main/assets/*" \
-              -print -quit || true)
+              -print
+          )
 
-            if [ -n "$INDEX_FILE" ]; then
-              WEB_DIST="$(dirname "$INDEX_FILE")"
-            fi
+          if [ -z "$WEB_DIST" ]; then
+            while IFS= read -r INDEX_FILE; do
+              CANDIDATE=$(dirname "$INDEX_FILE")
 
+              case "$CANDIDATE" in
+                */node_modules/*)
+                  continue
+                  ;;
+                */android/*)
+                  continue
+                  ;;
+              esac
+
+              WEB_DIST="$CANDIDATE"
+              break
+            done < <(
+              find "$WEB_DIR" -type f \
+                -name "index.html" \
+                -not -path "*/node_modules/*" \
+                -not -path "*/android/*" \
+                -print
+            )
           fi
 
           if [ -z "$WEB_DIST" ]; then
-
-            echo "WARNING: Web dist directory not found."
-
-            echo "Available index.html files:"
-            find extracted -type f \
-              -name "index.html" \
-              ! -path "*/node_modules/*" \
-              -print
-
-          else
-
-            echo "Web build found:"
-            echo "$WEB_DIST"
-
-            echo "WEB_DIST=$WEB_DIST" >> "$GITHUB_ENV"
-
+            echo "ERROR: Web index.html not found"
+            find "$WEB_DIR" -maxdepth 4 -type f | head -200
+            exit 1
           fi
 
+          echo "Web build found:"
+          echo "$WEB_DIST"
+
+          echo "WEB_DIST=$WEB_DIST" >> "$GITHUB_ENV"
 
       # ==========================================
-      # 9. Copy Web Assets
+      # Copy Web Assets
       # ==========================================
       - name: Copy Web Assets Into Android
         shell: bash
@@ -274,57 +256,125 @@ jobs:
 
           DEST="$ANDROID_DIR/app/src/main/assets/dist"
 
+          echo "Source:"
+          echo "$WEB_DIST"
+
           echo "Destination:"
           echo "$DEST"
 
-          # Completely remove old web assets
+          # Completely remove previous web assets
           rm -rf "$DEST"
 
           mkdir -p "$DEST"
 
-          if [ -n "${WEB_DIST:-}" ] && [ -d "$WEB_DIST" ]; then
+          # Copy CONTENTS of dist, not dist itself
+          cp -a "$WEB_DIST"/. "$DEST"/
 
-            echo "Copying web build..."
+          echo "Android assets:"
+          find "$DEST" -maxdepth 3 -type f | head -100
 
-            # IMPORTANT:
-            # Copy CONTENTS only.
-            # Do NOT create dist/dist or assets/assets.
-            cp -a "$WEB_DIST"/. "$DEST"/
-
-          else
-
-            echo "WARNING: No web build was found."
-
+          if [ ! -f "$DEST/index.html" ]; then
+            echo "ERROR: index.html was not copied"
+            exit 1
           fi
 
-          echo "Web assets copied."
-
-
       # ==========================================
-      # 10. Verify Web Assets
+      # Verify Android Web Assets
       # ==========================================
       - name: Verify Android Web Assets
         shell: bash
         run: |
           set -e
 
-          ASSETS="$ANDROID_DIR/app/src/main/assets"
+          INDEX="$ANDROID_DIR/app/src/main/assets/dist/index.html"
 
-          echo "Final Android assets:"
-          find "$ASSETS" -maxdepth 4 -type f | sort
-
-          # Remove accidental duplicate root assets
-          if [ -f "$ASSETS/index.html" ]; then
-            echo "Removing duplicate root index.html"
-            rm -f "$ASSETS/index.html"
+          if [ ! -f "$INDEX" ]; then
+            echo "ERROR: Missing Android assets index.html"
+            exit 1
           fi
 
-          if [ -d "$ASSETS/assets" ]; then
-            echo "Removing duplicate root assets directory"
-            rm -rf "$ASSETS/assets"
+          echo "Verified:"
+          echo "$INDEX"
+
+      # ==========================================
+      # Install Gradle 8.10.2
+      # ==========================================
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      # ==========================================
+      # Make Gradle Executable
+      # ==========================================
+      - name: Make Gradle Executable
+        shell: bash
+        run: |
+          set -e
+
+          cd "$ANDROID_DIR"
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
           fi
 
-          # Verify correct WebView entry
-          if [ ! -f "$ASSETS/dist/index.html" ]; then
-            echo "ERROR: Android WebView index.html not found:"
-            echo "$ASSETS/dist/index
+      # ==========================================
+      # Verify Gradle
+      # ==========================================
+      - name: Verify Gradle
+        shell: bash
+        run: |
+          set -e
+
+          cd "$ANDROID_DIR"
+
+          gradle --version
+
+      # ==========================================
+      # Build Debug APK
+      # ==========================================
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -e
+
+          cd "$ANDROID_DIR"
+
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --console=plain
+
+      # ==========================================
+      # Find APK
+      # ==========================================
+      - name: Find APK
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find "$ANDROID_DIR" \
+            -type f \
+            -name "*-debug.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Debug APK not found"
+            find "$ANDROID_DIR" -type f -name "*.apk" -print
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK"
+
+          echo "APK=$APK" >> "$GITHUB_ENV"
+
+      # ==========================================
+      # Upload APK
+      # ==========================================
+      - name: Upload SafeShield APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SafeShield-debug
+          path: ${{ env.APK }}
+          if-no-files-found: error
